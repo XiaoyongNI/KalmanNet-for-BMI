@@ -22,10 +22,12 @@ config = dict(
     batch_size=64,
     hidden_size=48,
     learn_rate=0.001,
+    weight_decay=1e-3,
     epochs=20,
     seq_len=25,
     NN_obs_model=True,
-    load_trained_obs=True,
+    load_trained_obs=False,
+    end_to_end_obs_train=True,
 )
 
 ## ---- DATALOADING ---- ##
@@ -42,7 +44,7 @@ train_loader = DataLoader(
 ## ---- BUILD KALMAN NET ---- ##
 class KalmanNet(nn.Module):
     # initialize class members
-    def __init__(self, hid_size, in_shape, out_shape, NN_obs_model=False, load_trained_obs=False, append_ones_y=True, device="cpu"):
+    def __init__(self, in_shape, out_shape, config, append_ones_y=True, device="cpu"):
         # initialize additional KF variables
         self.A, self.C, self.W, self.Q = (
             None,
@@ -54,14 +56,15 @@ class KalmanNet(nn.Module):
         self.prev_pred = np.zeros((1, out_shape))  # initial previous prediction is 0
         self.m = 0
         self.n = 0
-        self.NN_obs_model = NN_obs_model
-        self.load_trained_obs = load_trained_obs
+        self.NN_obs_model = config["NN_obs_model"]
+        self.load_trained_obs = config["load_trained_obs"]
+        self.end_to_end_obs_train = config["end_to_end_obs_train"]
         self.append_ones_y = append_ones_y
         self.device = device
         # shapes of input and output (kinda like the nn dimensions, but the whole model)
         self.in_shape = in_shape
         self.out_shape = out_shape
-        self.hid_size = hid_size
+        self.hid_size = config["hidden_size"]
 
         # initialize neural network
         super(KalmanNet, self).__init__()
@@ -69,14 +72,12 @@ class KalmanNet(nn.Module):
         # two fully connected linear layers
         self.lstm = nn.LSTM(in_shape, self.hid_size, batch_first=True)  # input layer
         self.fc1 = nn.Linear(self.hid_size, self.output_dim)  # output layer
-
-        hid_shape_obs = 64
-        self.lstm_obs = nn.LSTM(out_shape, hid_shape_obs, batch_first=True)
-        self.fc_obs = nn.Linear(hid_shape_obs, in_shape)
         
-
         if self.NN_obs_model:
             if self.load_trained_obs:
+                # check end_to_end_obs_train is False, otherwise raise error
+                if self.end_to_end_obs_train:
+                    raise ValueError("end_to_end_obs_train must be False when load_trained_obs is True.")
                 # Load the saved checkpoint for the Obs_Net model
                 self.obs_model = Obs_Net(out_shape, in_shape)
                 self.obs_model.load_state_dict(torch.load('obs_net_state_dict.pth'))
@@ -115,14 +116,18 @@ class KalmanNet(nn.Module):
         self.Ct = self.C.T
         self.n = self.n = self.C.size()[0]
         if self.NN_obs_model:
-            if not self.load_trained_obs:
+            if self.load_trained_obs:
+                # set to eval mode
+                self.obs_model.eval()
+            elif self.end_to_end_obs_train:
+                # set to train mode
+                self.obs_model.train()
+            else:
                 # train the observation model
                 self.obs_model.train_obs_nn(train_loader)
                 # set to eval mode
                 self.obs_model.eval()
-            else:
-                # set to eval mode
-                self.obs_model.eval()        
+                        
             self.Q = (
                 (x - self.obs_model(y)).T @ (x - self.obs_model(y)) / yt.shape[0]
             )  # covariance/noise for obs model
@@ -200,7 +205,12 @@ class KalmanNet(nn.Module):
     def train_nn(self, train_loader, optimizer, loss_fn):
         # model training
         train_loss = 0.0  # initialize loss at 0
-        self.train()  # put network in training mode
+        # put network in training mode
+        if self.end_to_end_obs_train:
+            self.train()
+        else:
+            self.lstm.train() 
+            self.fc1.train()
         for (
             data,
             target,
@@ -264,8 +274,14 @@ class KalmanNet(nn.Module):
 ## ---- DECLARE AND TRAIN KALMAN NET ---- ##
 # with wandb.init(project="knetLSTM", config=config):
 # declare model
-kn = KalmanNet(config["hidden_size"], tensors[0].shape[-1], tensors[1].shape[-1], NN_obs_model=config["NN_obs_model"], load_trained_obs=config["load_trained_obs"])
-optim = torch.optim.Adam(kn.parameters(), lr=config["learn_rate"])
+kn = KalmanNet(tensors[0].shape[-1], tensors[1].shape[-1], config)
+# print the number of trainable parameters in KalmanNet
+if config["end_to_end_obs_train"]:
+    trainable_params = list(kn.lstm.parameters()) + list(kn.fc1.parameters()) + list(kn.obs_model.parameters())
+else:
+    trainable_params = list(kn.lstm.parameters()) + list(kn.fc1.parameters())
+print("Number of trainable parameters in KalmanNet: ", sum(p.numel() for p in trainable_params))
+optim = torch.optim.Adam(trainable_params, lr=config["learn_rate"], weight_decay=config["weight_decay"])
 # train kf parameters
 kn.train_kf(tensors[0], tensors[1])
 # train nn parameters
@@ -299,7 +315,7 @@ utils.truthPlot(
     pred_params,
     labels,
     pts_graphed=200,
-    title="Ground Truth vs. Prediction for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"])
+    title="Ground Truth vs. Prediction"+"NN_obs_model="+str(config["NN_obs_model"])
 )
 mse = utils.mse_all(targ_params, pred_params, numpy=True)  # MSE
 print("MSE error for KalmanNet on test set: ", mse)
@@ -307,5 +323,5 @@ corr = utils.corr_all(targ_params, pred_params)  # correlation
 print("Correlation for KalmanNet on test set: ", corr)
 
 # barplots of mse and corr
-utils.barPlot(mse, labels, title="MSE for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"]))
-utils.barPlot(corr, labels, title="Correlation Coeficient for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"]))
+utils.barPlot(mse, labels, title="MSE"+"NN_obs_model="+str(config["NN_obs_model"]))
+utils.barPlot(corr, labels, title="Correlation"+"NN_obs_model="+str(config["NN_obs_model"]))

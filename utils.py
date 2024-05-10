@@ -204,7 +204,7 @@ def truthPlot(targ, preds, labels, pts_graphed=100, title="Ground Truth vs. Pred
         axs[i].legend()
     fig.suptitle(title)
     plt.tight_layout()
-    plt.show()
+    plt.savefig(f'{title}.png')
 
 # barplot for each parameter
 # REQUIRES: lists of data and corresponding labels to be plotted, title
@@ -222,5 +222,5 @@ def barPlot(data, labels, title="Default Barplot", size=4):
     bar = plt.bar(labels, data, color=colors, zorder=3)
     plt.bar_label(bar, str_data)
     plt.title(title)
-    plt.show()
+    plt.savefig(f'{title}.png')
 

@@ -299,7 +299,7 @@ utils.truthPlot(
     pred_params,
     labels,
     pts_graphed=200,
-    title="Ground Truth vs. Prediction for Kalman LSTM",
+    title="Ground Truth vs. Prediction for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"])
 )
 mse = utils.mse_all(targ_params, pred_params, numpy=True)  # MSE
 print("MSE error for KalmanNet on test set: ", mse)
@@ -307,5 +307,5 @@ corr = utils.corr_all(targ_params, pred_params)  # correlation
 print("Correlation for KalmanNet on test set: ", corr)
 
 # barplots of mse and corr
-utils.barPlot(mse, labels, title="MSE for Kalman LSTM")
-utils.barPlot(corr, labels, title="Correlation Coeficient for Kalman LSTM")
+utils.barPlot(mse, labels, title="MSE for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"]))
+utils.barPlot(corr, labels, title="Correlation Coeficient for Kalman LSTM"+"NN_obs_model="+str(config["NN_obs_model"]))
